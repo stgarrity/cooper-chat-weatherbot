@@ -47,9 +47,39 @@ class CooperChatClient:
         available = [c.get("name") for c in contacts]
         raise ValueError(f"User '{name}' not found. Available: {available}")
 
+    def get_inbox(self, unread_only: bool = True) -> list[dict]:
+        """Get messages sent to this bot."""
+        params = {"unread_only": "true"} if unread_only else {}
+        resp = requests.get(
+            f"{self.base_url}/api/messages/inbox",
+            headers=self._headers(),
+            params=params,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("messages", []) or []
+
+    def mark_as_read(self, message_id: int) -> None:
+        """Mark a message as read."""
+        requests.put(
+            f"{self.base_url}/api/messages/{message_id}/read",
+            headers=self._headers(),
+            timeout=10,
+        )
+
+    def get_conversation(self, user_id: int, limit: int = 10) -> list[dict]:
+        """Get recent conversation with a user."""
+        resp = requests.get(
+            f"{self.base_url}/api/messages/conversation/{user_id}",
+            headers=self._headers(),
+            params={"limit": limit},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("messages", []) or []
+
     def expire_messages(self, recipient_id: int) -> int:
-        """Expire (mark as read) all unread messages sent by this bot to recipient.
-        Returns the number of expired messages."""
+        """Expire (mark as read) all unread messages sent by this bot to recipient."""
         resp = requests.post(
             f"{self.base_url}/api/messages/expire",
             headers=self._headers(),

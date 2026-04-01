@@ -7,8 +7,8 @@ RUN adduser --disabled-password --no-create-home botuser
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY weather.py chat.py main.py ./
+COPY weather.py chat.py conversation.py main.py ./
 
 USER botuser
 
-CMD ["python", "main.py"]
+CMD ["python", "main.py", "--listen"]

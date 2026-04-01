@@ -1,4 +1,4 @@
-"""WeatherBot for Cooper Chat — sends a daily weather forecast message."""
+"""WeatherBot for Cooper Chat — daily forecast + interactive weather chat."""
 
 import logging
 import os
@@ -17,7 +17,6 @@ log = logging.getLogger("weatherbot")
 
 def load_env() -> dict:
     """Load and validate required environment variables."""
-    # Support .env file mounted into container
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(env_path):
         log.info("Loading .env from %s", env_path)
@@ -45,42 +44,64 @@ def load_env() -> dict:
     return config
 
 
-def main():
-    config = load_env()
-
+def send_daily_report(config: dict):
+    """Send the daily weather forecast (original behavior)."""
     url = config["COOPER_CHAT_URL"]
     bot_name = config["BOT_USERNAME"]
     recipient_name = config["RECIPIENT_NAME"]
     location = config["WEATHER_LOCATION"]
 
-    # 1. Authenticate
     log.info("Authenticating as '%s' at %s", bot_name, url)
     client = CooperChatClient(url)
     client.register(bot_name, config["FAMILY_SECRET"], is_bot=True)
     log.info("Authenticated (user_id=%s)", client.user_id)
 
-    # 2. Find recipient
     log.info("Looking up recipient '%s'", recipient_name)
     recipient = client.find_user_by_name(recipient_name)
     recipient_id = recipient["id"]
-    log.info("Found recipient: %s (id=%s)", recipient["name"], recipient_id)
 
-    # 3. Expire old unread messages
     expired = client.expire_messages(recipient_id)
     if expired > 0:
         log.info("Expired %d old unread message(s)", expired)
 
-    # 4. Fetch weather
     log.info("Fetching weather for '%s'", location)
     message = get_weather_message(location)
     log.info("Weather message:\n%s", message)
 
-    # 5. Send message
-    log.info("Sending weather to %s", recipient["name"])
     result = client.send_message(recipient_id, message)
     log.info("Message sent (id=%s)", result.get("id"))
-
     log.info("Done!")
+
+
+def listen(config: dict):
+    """Run the interactive listener (long-running)."""
+    from openai import OpenAI
+    from conversation import listen_loop
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        log.error("OPENAI_API_KEY required for --listen mode")
+        sys.exit(1)
+
+    url = config["COOPER_CHAT_URL"]
+    bot_name = config["BOT_USERNAME"]
+
+    log.info("Authenticating as '%s' at %s", bot_name, url)
+    client = CooperChatClient(url)
+    client.register(bot_name, config["FAMILY_SECRET"], is_bot=True)
+    log.info("Authenticated (user_id=%s)", client.user_id)
+
+    openai_client = OpenAI(api_key=api_key)
+    listen_loop(client, openai_client)
+
+
+def main():
+    config = load_env()
+
+    if "--listen" in sys.argv:
+        listen(config)
+    else:
+        send_daily_report(config)
 
 
 if __name__ == "__main__":
