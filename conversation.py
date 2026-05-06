@@ -7,6 +7,7 @@ NOTE: Cooper Chat does not support emoji. Keep all responses ASCII-only.
 import json
 import logging
 import time
+from datetime import datetime, timezone, timedelta
 
 from openai import OpenAI
 
@@ -47,6 +48,31 @@ TOOLS = [
 ]
 
 
+SESSION_TIMEOUT = timedelta(hours=1)
+
+
+def _build_history_messages(
+    history: list[dict], bot_user_id: int, sender_name: str,
+) -> list[dict]:
+    """Build OpenAI message array from conversation history within session timeout."""
+    cutoff = datetime.now(timezone.utc) - SESSION_TIMEOUT
+    messages = []
+    for msg in history:
+        created_str = msg.get("created_at", "")
+        try:
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        if created < cutoff:
+            continue
+        content = msg.get("content", "")
+        if msg.get("sender_id") == bot_user_id:
+            messages.append({"role": "assistant", "content": content})
+        else:
+            messages.append({"role": "user", "content": f"{sender_name} says: {content}"})
+    return messages
+
+
 def _handle_tool_call(name: str, args: dict) -> str:
     """Execute a tool call and return the result as a string."""
     if name == "get_weather":
@@ -70,12 +96,21 @@ def _handle_tool_call(name: str, args: dict) -> str:
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
-def reply_to_message(openai_client: OpenAI, sender_name: str, message_text: str) -> str:
+def reply_to_message(
+    openai_client: OpenAI, sender_name: str, message_text: str,
+    history: list[dict] | None = None, bot_user_id: int | None = None,
+) -> str:
     """Generate a reply to a user message using GPT with weather tools."""
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"{sender_name} says: {message_text}"},
-    ]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    history_msgs = (
+        _build_history_messages(history, bot_user_id, sender_name)
+        if history and bot_user_id is not None
+        else []
+    )
+    if history_msgs:
+        messages.extend(history_msgs)
+    else:
+        messages.append({"role": "user", "content": f"{sender_name} says: {message_text}"})
 
     response = openai_client.chat.completions.create(
         model="gpt-5.4",
@@ -143,7 +178,11 @@ def listen_loop(
                 log.info("Message from %s: %s", sender_name, content[:80])
 
                 try:
-                    reply = reply_to_message(openai_client, sender_name, content)
+                    history = chat_client.get_conversation(sender_id, limit=20)
+                    reply = reply_to_message(
+                        openai_client, sender_name, content,
+                        history=history, bot_user_id=chat_client.user_id,
+                    )
                     chat_client.send_message(sender_id, reply)
                     log.info("Replied to %s: %s", sender_name, reply[:80])
                 except Exception as e:
