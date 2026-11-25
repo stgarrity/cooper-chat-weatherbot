@@ -4,6 +4,8 @@ import logging
 import os
 import sys
 
+import requests
+
 from chat import CooperChatClient
 from weather import get_weather_message
 
@@ -60,13 +62,13 @@ def send_daily_report(config: dict):
     recipient = client.find_user_by_name(recipient_name)
     recipient_id = recipient["id"]
 
-    expired = client.expire_messages(recipient_id)
-    if expired > 0:
-        log.info("Expired %d old unread message(s)", expired)
-
     log.info("Fetching weather for '%s'", location)
     message = get_weather_message(location)
     log.info("Weather message:\n%s", message)
+
+    expired = client.expire_messages(recipient_id)
+    if expired > 0:
+        log.info("Expired %d old unread message(s)", expired)
 
     result = client.send_message(recipient_id, message)
     log.info("Message sent (id=%s)", result.get("id"))
@@ -101,7 +103,11 @@ def main():
     if "--listen" in sys.argv:
         listen(config)
     else:
-        send_daily_report(config)
+        try:
+            send_daily_report(config)
+        except requests.RequestException as error:
+            log.error("Daily weather report failed: %s", error)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

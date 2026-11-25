@@ -1,9 +1,17 @@
 """Open-Meteo weather client for WeatherBot."""
 
+import logging
+import time
+
 import requests
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+REQUEST_TIMEOUT = (15, 30)
+MAX_ATTEMPTS = 4
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+log = logging.getLogger("weatherbot.weather")
 
 # WMO Weather Codes → (description, emoji)
 WMO_CODES = {
@@ -38,11 +46,32 @@ WMO_CODES = {
 }
 
 
+def _get_json(url: str, params: dict) -> dict:
+    """Retry transient failures of read-only weather requests, with bounded backoff."""
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with requests.get(url, params=params, timeout=REQUEST_TIMEOUT) as resp:
+                resp.raise_for_status()
+                return resp.json()
+        except requests.exceptions.SSLError:
+            raise
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as error:
+            if isinstance(error, requests.HTTPError):
+                if error.response is None or error.response.status_code not in RETRY_STATUSES:
+                    raise
+            if attempt == MAX_ATTEMPTS:
+                raise
+            delay = 2 ** attempt
+            log.warning(
+                "Weather request to %s failed (attempt %d/%d): %s; retrying in %ds",
+                url, attempt, MAX_ATTEMPTS, error, delay,
+            )
+            time.sleep(delay)
+
+
 def geocode(location: str) -> tuple[float, float, str]:
     """Resolve a location name to coordinates. Returns (lat, lon, display_name)."""
-    resp = requests.get(GEOCODING_URL, params={"name": location.split(",")[0].strip(), "count": 1, "format": "json"}, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()
+    data = _get_json(GEOCODING_URL, {"name": location.split(",")[0].strip(), "count": 1, "format": "json"})
 
     if not data.get("results"):
         raise ValueError(f"Could not find location: {location}")
@@ -66,9 +95,7 @@ def fetch_weather(lat: float, lon: float) -> dict:
         "timezone": "auto",
         "forecast_days": 1,
     }
-    resp = requests.get(FORECAST_URL, params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return _get_json(FORECAST_URL, params)
 
 
 def format_message(weather: dict, location_name: str) -> str:
